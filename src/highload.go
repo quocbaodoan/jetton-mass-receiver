@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
-	"os"
-	"strconv"
+	"fmt"
 	"strings"
 	"time"
 
@@ -19,138 +17,78 @@ import (
 	"github.com/xssnick/tonutils-go/ton/wallet"
 )
 
-type MessageEntry struct {
-	Amount  string `json:"amount"`
-	Address string `json:"address"`
-}
-
-func massSender(seedPhrase string, jettonMasterAddress string, commentary string, messageEntryFilename string) {
+func massSender(seedPhrase string, jettonMasterAddress, commentary, receiverAddress string) {
 	client := liteclient.NewConnectionPool()
 
-	// Connect to mainnet lite server
-	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	// connect to testnet lite server
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
 	if err != nil {
-		log.Error("connection err:", err.Error())
-		return
+		panic(err)
 	}
 
 	ctx := client.StickyContext(context.Background())
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 
+	// initialize ton api lite connection wrapper
+	api := ton.NewAPIClient(client)
+
+	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split(seedPhrase, " ")
 
-	log.Infof("Seed words: %s", words)
-
-	// Initialize highload wallet
-	w, err := wallet.FromSeed(api, words, wallet.HighloadV2R2)
+	w, err := wallet.FromSeed(api, words, wallet.V4R2)
 	if err != nil {
-		log.Error("FromSeed err:", err.Error())
+		log.Fatal("FromSeed err:", err.Error())
 		return
 	}
 
-	log.Infof("Wallet address: %s", w.WalletAddress())
+	walletAddress := w.WalletAddress()
 
-
-	block, err := api.CurrentMasterchainInfo(context.Background())
-	if err != nil {
-		log.Error("CurrentMasterchainInfo err:", err.Error())
-		return
-	}
-
-	balance, err := w.GetBalance(context.Background(), block)
-	if err != nil {
-		log.Error("GetBalance err:", err.Error())
-		return
-	}
-
-	// Read message entries from file
-	data, err := os.ReadFile(messageEntryFilename)
-	if err != nil {
-		log.Error("Error reading file:", err.Error())
-		return
-	}
-
-	var messages []MessageEntry
-	err = json.Unmarshal(data, &messages)
-	if err != nil {
-		log.Error("Error unmarshalling JSON:", err.Error())
-		return
-	}
-
-	// if balance < len(messages) * 0.05 + their amount then exit
-	sum := 0.0
-	for _, msg := range messages {
-		// from string to float
-		amount, err := strconv.ParseFloat(msg.Amount, 64)
-		if err != nil {
-			log.Error("Error parsing amount:", err.Error())
-			return
-		}
-
-		sum += amount
-	}
-
-	if float64(balance.Nano().Int64()) < (float64(len(messages)) * 5e7) + sum {
-		log.Error("Not enough balance to send all messages")
-		return
-	}
-
-	// Initialize token wallet
 	token := jetton.NewJettonMasterClient(api, address.MustParseAddr(jettonMasterAddress))
-	jettonWallet, err := token.GetJettonWallet(ctx, w.WalletAddress())
+
+	// find our jetton wallet
+	tokenWallet, err := token.GetJettonWallet(ctx, w.WalletAddress())
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	jettonBalance, err := jettonWallet.GetBalance(ctx)
+	tokenBalance, err := tokenWallet.GetBalance(ctx)
 	if err != nil {
-		log.Error("GetBalance err:", err.Error())
-		return
+		log.Fatal(err)
 	}
 
-	log.Infof("Balance: %s jettons", jettonBalance)
+	formattedBalance := float64(tokenBalance.Int64()) / 1000000.0
+	sendBalance := float64(tokenBalance.Int64()) / 1000000000.0
 
+	log.Printf("Wallet address: %s | Jetton balance: %f", walletAddress, formattedBalance)
 
-	// Start sending messages in batches
-	const batchSize = 100
-	for i := 0; i < len(messages); i += batchSize {
-		end := i + batchSize
-		if end > len(messages) {
-			end = len(messages)
-		}
+	amountTokens := tlb.MustFromDecimal(fmt.Sprintf("%.9f", sendBalance), 9)
 
-		batch := messages[i:end]
-		var walletMessages []*wallet.Message
-		for _, msg := range batch {
-			log.Printf(msg.Address, msg.Amount)
-			amountTokens := tlb.MustFromDecimal(msg.Amount, 9)
-			comment, err := wallet.CreateCommentCell(commentary)
-			if err != nil {
-				log.Error("Error creating comment cell:", err.Error())
-				log.Fatal(err)
-			}
-			to := address.MustParseAddr(msg.Address)
-			transferPayload, err := jettonWallet.BuildTransferPayload(to, amountTokens, tlb.ZeroCoins, comment)
-			if err != nil {
-				log.Error("Error building transfer payload:", err.Error())
-				log.Fatal(err)
-			}
-			walletMsg := wallet.SimpleMessage(jettonWallet.Address(), tlb.MustFromTON("0.05"), transferPayload)
-			walletMessages = append(walletMessages, walletMsg)
-		}
+	comment, err := wallet.CreateCommentCell(commentary)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-		log.Infof("Sending transaction and waiting for confirmation for batch starting from index %s...")
-
-		txHash, err := w.SendManyWaitTxHash(ctx, walletMessages)
+	if float64(amountTokens.Nano().Int64()) > 0 {
+		// address of receiver's wallet (not token wallet, just usual)
+		to := address.MustParseAddr(receiverAddress)
+		transferPayload, err := tokenWallet.BuildTransferPayloadV2(to, to, amountTokens, tlb.ZeroCoins, comment, nil)
 		if err != nil {
-			log.Error("Transfer err:", err.Error())
-			return
+			log.Fatal(err)
 		}
 
-		log.Infof("Batch transaction sent, hash: %s", base64.StdEncoding.EncodeToString(txHash))
-		log.Infof("Explorer link: https://tonscan.org/tx/ %s", base64.URLEncoding.EncodeToString(txHash))
+		// your TON balance must be > 0.05 to send
+		msg := wallet.SimpleMessage(tokenWallet.Address(), tlb.MustFromTON("0.05"), transferPayload)
 
-		log.Info("Sleeping for 30 seconds...")
+		log.Printf("Sending transaction with amount %f", formattedBalance)
+		tx, _, err := w.SendWaitTransaction(ctx, msg)
+		if err != nil {
+			panic(err)
+		}
+		log.Printf("Transaction sent, hash: %s", base64.StdEncoding.EncodeToString(tx.Hash))
+		log.Printf("Explorer link: https://tonscan.org/tx/%s" + base64.URLEncoding.EncodeToString(tx.Hash))
+
+		log.Print("Sleeping for 30 seconds...")
 		time.Sleep(30 * time.Second)
+	} else {
+		log.Printf("Wallet address: %s don't have Jetton balance to send!", walletAddress)
 	}
 }

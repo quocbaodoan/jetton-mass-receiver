@@ -14,10 +14,14 @@ import (
 
 // Configuration stores the user's settings
 type Configuration struct {
-	SeedPhrase   string `json:"seedPhrase"`
-	JettonMasterAddress string `json:"jettonMasterAddress"`
-	Commentary   string `json:"commentary"`
+	JettonMasterAddress  string `json:"jettonMasterAddress"`
+	Commentary           string `json:"commentary"`
 	MessageEntryFilename string `json:"messageEntryFilename"`
+	ReceiverAddress      string `json:"receiverAddress"`
+}
+
+type MessageEntry struct {
+	Seed string `json:"seed"`
 }
 
 const configFilePath = "config.json"
@@ -34,7 +38,6 @@ var setupCmd = &cobra.Command{
 	Run:   func(cmd *cobra.Command, args []string) { setupConfiguration() },
 }
 
-
 func runMainLogic(cmd *cobra.Command, args []string) {
 	config, err := loadConfiguration(configFilePath)
 	if err != nil {
@@ -43,14 +46,31 @@ func runMainLogic(cmd *cobra.Command, args []string) {
 	}
 	fmt.Println("Running main logic with current configuration...")
 
-	massSender(config.SeedPhrase, config.JettonMasterAddress, config.Commentary, config.MessageEntryFilename)
+	// Read message entries from file
+	data, err := os.ReadFile(config.MessageEntryFilename)
+	if err != nil {
+		log.Fatal("Error reading file:", err.Error())
+		return
+	}
+
+	var messages []MessageEntry
+	err = json.Unmarshal(data, &messages)
+	if err != nil {
+		log.Fatal("Error unmarshalling JSON:", err.Error())
+		return
+	}
+
+	for _, message := range messages {
+		massSender(message.Seed, config.JettonMasterAddress, config.Commentary, config.ReceiverAddress)
+	}
+
 }
 
 func setupConfiguration() {
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Println("Enter Seed Phrase (From Any Wallet):")
-	seedPhrase, _ := reader.ReadString('\n')
+	fmt.Println("Enter Receive Address:")
+	receiverAddress, _ := reader.ReadString('\n')
 
 	fmt.Println("Enter Token Address:")
 	jettonMasterAddress, _ := reader.ReadString('\n')
@@ -62,8 +82,8 @@ func setupConfiguration() {
 	messageEntryFilename, _ := reader.ReadString('\n')
 
 	config := Configuration{
-		SeedPhrase:           seedPhrase,
-		JettonMasterAddress:         jettonMasterAddress,
+		ReceiverAddress:      receiverAddress,
+		JettonMasterAddress:  jettonMasterAddress,
 		Commentary:           commentary,
 		MessageEntryFilename: messageEntryFilename,
 	}
@@ -74,10 +94,9 @@ func setupConfiguration() {
 	fmt.Println("Configuration saved successfully.")
 }
 
-
 func saveConfiguration(config Configuration, filePath string) error {
 	// Trim whitespace from the configuration values
-	config.SeedPhrase = strings.TrimSpace(config.SeedPhrase)
+	config.ReceiverAddress = strings.TrimSpace(config.ReceiverAddress)
 	config.JettonMasterAddress = strings.TrimSpace(config.JettonMasterAddress)
 	config.Commentary = strings.TrimSpace(config.Commentary)
 	config.MessageEntryFilename = strings.TrimSpace(config.MessageEntryFilename)
