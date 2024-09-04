@@ -23,7 +23,9 @@ func massSender(seedPhrase string, jettonMasterAddress, commentary, receiverAddr
 	// connect to testnet lite server
 	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
 	if err != nil {
-		panic(err)
+		log.Error(err)
+		log.Error("Skipped!")
+		return
 	}
 
 	ctx := client.StickyContext(context.Background())
@@ -36,7 +38,8 @@ func massSender(seedPhrase string, jettonMasterAddress, commentary, receiverAddr
 
 	w, err := wallet.FromSeed(api, words, wallet.V4R2)
 	if err != nil {
-		log.Fatal("FromSeed err:", err.Error())
+		log.Error("FromSeed err:", err.Error())
+		log.Error("Skipped!")
 		return
 	}
 
@@ -47,18 +50,21 @@ func massSender(seedPhrase string, jettonMasterAddress, commentary, receiverAddr
 	// find our jetton wallet
 	tokenWallet, err := token.GetJettonWallet(ctx, w.WalletAddress())
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err)
+		log.Error("Skipped!")
+		return
 	}
 
 	tokenBalance, err := tokenWallet.GetBalance(ctx)
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err)
+		log.Error("Skipped!")
+		return
 	}
 
-	formattedBalance := float64(tokenBalance.Int64()) / 1000000.0
 	sendBalance := float64(tokenBalance.Int64()) / 1000000000.0
 
-	log.Printf("Wallet address: %s | Jetton balance: %f", walletAddress, formattedBalance)
+	log.Printf("Wallet address: %s | Jetton balance: %f", walletAddress, sendBalance)
 
 	amountTokens := tlb.MustFromDecimal(fmt.Sprintf("%.9f", sendBalance), 9)
 
@@ -78,17 +84,18 @@ func massSender(seedPhrase string, jettonMasterAddress, commentary, receiverAddr
 		// your TON balance must be > 0.05 to send
 		msg := wallet.SimpleMessage(tokenWallet.Address(), tlb.MustFromTON("0.05"), transferPayload)
 
-		log.Printf("Sending transaction with amount %f", formattedBalance)
+		log.Printf("Sending transaction with amount %f", sendBalance)
 		tx, _, err := w.SendWaitTransaction(ctx, msg)
 		if err != nil {
 			panic(err)
 		}
 		log.Printf("Transaction sent, hash: %s", base64.StdEncoding.EncodeToString(tx.Hash))
-		log.Printf("Explorer link: https://tonscan.org/tx/%s" + base64.URLEncoding.EncodeToString(tx.Hash))
+		log.Printf("Explorer link: https://tonscan.org/tx/%s", base64.URLEncoding.EncodeToString(tx.Hash))
 
-		log.Print("Sleeping for 30 seconds...")
-		time.Sleep(30 * time.Second)
+		log.Print("Sleeping for 5 seconds...")
+		time.Sleep(5 * time.Second)
 	} else {
 		log.Printf("Wallet address: %s don't have Jetton balance to send!", walletAddress)
+		time.Sleep(5 * time.Second)
 	}
 }

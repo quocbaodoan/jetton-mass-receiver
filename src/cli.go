@@ -60,7 +60,8 @@ func runMainLogic(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	for _, message := range messages {
+	for i, message := range messages {
+		log.Printf("Wallet %d", i+1)
 		massSender(message.Seed, config.JettonMasterAddress, config.Commentary, config.ReceiverAddress)
 	}
 
